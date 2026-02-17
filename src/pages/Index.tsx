@@ -5,11 +5,10 @@ import { StatsBar } from '@/components/dashboard/StatsBar';
 import { EVTable } from '@/components/dashboard/EVTable';
 import { PlayerDetailModal } from '@/components/dashboard/PlayerDetailModal';
 import { ParlayBuilder } from '@/components/dashboard/ParlayBuilder';
-import { generateMockEVCalculations } from '@/lib/mock-data';
+import { useEVCalculations } from '@/hooks/useEVCalculations';
 import type { EVCalculation, DashboardFilters } from '@/types';
 
 const Index = () => {
-  const [allData] = useState<EVCalculation[]>(() => generateMockEVCalculations());
   const [filters, setFilters] = useState<DashboardFilters>({
     sport: 'All',
     statType: 'All',
@@ -18,6 +17,7 @@ const Index = () => {
     sortBy: 'ev_pct',
     sortDir: 'desc',
   });
+
   const [selectedEV, setSelectedEV] = useState<EVCalculation | null>(null);
   const [parlayLegs, setParlayLegs] = useState<EVCalculation[]>([]);
 
@@ -26,18 +26,28 @@ const Index = () => {
     document.documentElement.classList.add('dark');
   }, []);
 
+  // Fetch real data from Supabase (replaces mock data)
+  const { data: allData = [], isLoading, error } = useEVCalculations({
+    sport: filters.sport,
+    minEV: filters.minEV,
+  });
+
+  // IMPORTANT: useMemo must be ABOVE early returns (hooks order issue fix)
   const filteredData = useMemo(() => {
     let result = [...allData];
 
     if (filters.sport !== 'All') {
       result = result.filter((d) => d.player_prop.player.sport === filters.sport);
     }
+
     if (filters.statType !== 'All') {
       result = result.filter((d) => d.player_prop.stat_type === filters.statType);
     }
+
     if (filters.minEV > 0) {
       result = result.filter((d) => d.ev_pct >= filters.minEV);
     }
+
     if (filters.search) {
       const q = filters.search.toLowerCase();
       result = result.filter((d) =>
@@ -62,6 +72,7 @@ const Index = () => {
           ? aVal.localeCompare(bVal as string)
           : (bVal as string).localeCompare(aVal);
       }
+
       return filters.sortDir === 'asc'
         ? (aVal as number) - (bVal as number)
         : (bVal as number) - (aVal as number);
@@ -88,6 +99,35 @@ const Index = () => {
 
   const parlayIds = new Set(parlayLegs.map((l) => l.id));
 
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen flex-col bg-background">
+        <DashboardHeader />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-lg">Loading odds data...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="flex min-h-screen flex-col bg-background">
+        <DashboardHeader />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-lg text-red-500 mb-4">Error loading data</div>
+            <div className="text-sm text-muted-foreground">
+              {error instanceof Error ? error.message : 'Please try again'}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <DashboardHeader />
@@ -103,11 +143,13 @@ const Index = () => {
           parlayIds={parlayIds}
         />
       </div>
+
       <ParlayBuilder
         legs={parlayLegs}
         onRemove={(id) => setParlayLegs((p) => p.filter((l) => l.id !== id))}
         onClear={() => setParlayLegs([])}
       />
+
       <PlayerDetailModal
         ev={selectedEV}
         open={!!selectedEV}

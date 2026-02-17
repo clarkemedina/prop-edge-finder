@@ -1,43 +1,59 @@
 import { calculateMarketConsensus, calculateEV } from '@/lib/evCalculator';
 import { oddsService } from './oddsService';
-import { EVCalculation } from '@/types';
+import { EVCalculation, Sport, StatType } from '@/types';
+import { supabase } from '@/lib/supabaseClient';
 
 export class EVService {
-  /**
-   * Calculate EV for all available props
-   */
   async calculateAllEVs(filters?: {
     sport?: string;
     minEV?: number;
   }): Promise<EVCalculation[]> {
-    // Get market consensus data
     const consensus = await oddsService.getMarketConsensus({
       sport: filters?.sport,
     });
 
+    if (!consensus.length) return [];
+
+    const { data: allOdds, error } = await supabase
+      .from('odds_snapshots')
+      .select('*')
+      .eq('sport', filters?.sport ?? 'NBA')
+      .eq('sportsbook', 'PrizePicks');
+
+    if (error || !allOdds) {
+      console.error(error);
+      return [];
+    }
+
+    const oddsMap = new Map<string, any[]>();
+
+    for (const row of allOdds) {
+      const key = `${row.player_id}-${row.stat_type}-${row.line}`;
+      if (!oddsMap.has(key)) oddsMap.set(key, []);
+      oddsMap.get(key)!.push({ ...row }); // clone row
+    }
+
     const evCalculations: EVCalculation[] = [];
 
     for (const prop of consensus) {
-      // For each prop, get all sportsbook odds
-      const odds = await oddsService.getLatestOdds(
-        prop.player_id,
-        prop.stat_type,
-        prop.line
-      );
+      const key = `${prop.player_id}-${prop.stat_type}-${prop.line}`;
+      const odds = oddsMap.get(key);
+      if (!odds || odds.length === 0) continue;
 
-      if (odds.length === 0) continue;
-
-      // Calculate EV for each sportsbook
       for (const book of odds) {
         const overEV = calculateEV(prop.consensus_over, book.over_odds);
         const underEV = calculateEV(prop.consensus_under, book.under_odds);
 
-        // Take the better side
-        const bestSide = overEV.expectedValue > underEV.expectedValue ? 'Over' : 'Under';
-        const bestEVResult = bestSide === 'Over' ? overEV : underEV;
+        const bestSide =
+          overEV.expectedValue > underEV.expectedValue ? 'Over' : 'Under';
 
-        // Filter by minimum EV if specified
-        if (filters?.minEV && bestEVResult.expectedValue < filters.minEV) {
+        const bestEVResult =
+          bestSide === 'Over' ? overEV : underEV;
+
+        if (
+          filters?.minEV !== undefined &&
+          bestEVResult.expectedValue < filters.minEV
+        ) {
           continue;
         }
 
@@ -50,54 +66,86 @@ export class EVService {
             player: {
               id: prop.player_id,
               name: prop.player_name,
-              sport: prop.sport,
-              position: '', // You'll need to fetch this from player data
-              team: '', // You'll need to fetch this from player data
+              sport: prop.sport as Sport,
+              position: '',
+              team: '',
             },
-            stat_type: prop.stat_type,
+            stat_type: prop.stat_type as StatType,
             game_date: prop.game_date,
-            opponent: '', // Fetch from game data
+            opponent: '',
           },
           best_sportsbook: {
             id: book.sportsbook,
             name: book.sportsbook,
           },
           best_line: prop.line,
-          best_odds: bestSide === 'Over' ? book.over_odds : book.under_odds,
+          best_odds:
+            bestSide === 'Over'
+              ? book.over_odds
+              : book.under_odds,
           market_consensus_line: prop.line,
-          market_consensus_prob: bestSide === 'Over' ? prop.consensus_over : prop.consensus_under,
+          market_consensus_prob:
+            bestSide === 'Over'
+              ? prop.consensus_over
+              : prop.consensus_under,
           implied_prob: bestEVResult.trueProbability,
-          true_prob: prop.consensus_over,
+          true_prob:
+            bestSide === 'Over'
+              ? prop.consensus_over
+              : prop.consensus_under,
           edge_pct: bestEVResult.edgePercent,
           ev_pct: bestEVResult.expectedValue,
-          confidence_score: prop.num_sportsbooks / 10, // More books = higher confidence
+          confidence_score: prop.num_sportsbooks / 10,
           direction: bestSide,
-          all_odds: odds, // Include all odds for reference
+          all_odds: [...odds], // shallow clone only
         });
       }
     }
 
-    // Sort by EV descending
-    return evCalculations.sort((a, b) => b.ev_pct - a.ev_pct);
+    // Group by player safely
+    const playerMap = new Map<string, EVCalculation[]>();
+
+    for (const ev of evCalculations) {
+      if (!playerMap.has(ev.player_prop.player_id)) {
+        playerMap.set(ev.player_prop.player_id, []);
+      }
+      playerMap.get(ev.player_prop.player_id)!.push(ev);
+    }
+
+    const grouped: EVCalculation[] = [];
+
+    for (const [, playerEvs] of playerMap) {
+      const sorted = [...playerEvs].sort((a, b) => b.ev_pct - a.ev_pct);
+
+      const best = { ...sorted[0] };
+
+      // attach cloned player lines WITHOUT circular reference
+      (best as any).all_player_lines = sorted.map(ev => ({
+        ...ev,
+        all_player_lines: undefined,
+      }));
+
+      grouped.push(best);
+    }
+
+    return grouped.sort((a, b) => b.ev_pct - a.ev_pct);
   }
 
-  /**
-   * Calculate EV for a specific player prop
-   */
   async calculatePropEV(
     playerId: string,
     statType: string,
     line: number
   ): Promise<EVCalculation[]> {
-    const odds = await oddsService.getLatestOdds(playerId, statType, line);
+    const odds = await oddsService.getLatestOdds(
+      playerId,
+      statType,
+      line
+    );
 
-    if (odds.length === 0) {
-      return [];
-    }
+    if (!odds.length) return [];
 
-    // Calculate consensus from available odds
     const consensus = calculateMarketConsensus(
-      odds.map(o => ({
+      odds.map((o) => ({
         overOdds: o.over_odds,
         underOdds: o.under_odds,
         sportsbook: o.sportsbook,
@@ -110,8 +158,11 @@ export class EVService {
       const overEV = calculateEV(consensus.over, book.over_odds);
       const underEV = calculateEV(consensus.under, book.under_odds);
 
-      const bestSide = overEV.expectedValue > underEV.expectedValue ? 'Over' : 'Under';
-      const bestEVResult = bestSide === 'Over' ? overEV : underEV;
+      const bestSide =
+        overEV.expectedValue > underEV.expectedValue ? 'Over' : 'Under';
+
+      const bestEVResult =
+        bestSide === 'Over' ? overEV : underEV;
 
       evCalculations.push({
         id: `${playerId}-${statType}-${line}-${book.sportsbook}`,
@@ -121,12 +172,12 @@ export class EVService {
           player_id: playerId,
           player: {
             id: playerId,
-            name: '', // Fetch from player data
-            sport: '',
+            name: '',
+            sport: 'NBA' as Sport,
             position: '',
             team: '',
           },
-          stat_type: statType,
+          stat_type: statType as StatType,
           game_date: book.game_date,
           opponent: '',
         },
@@ -135,16 +186,25 @@ export class EVService {
           name: book.sportsbook,
         },
         best_line: line,
-        best_odds: bestSide === 'Over' ? book.over_odds : book.under_odds,
+        best_odds:
+          bestSide === 'Over'
+            ? book.over_odds
+            : book.under_odds,
         market_consensus_line: line,
-        market_consensus_prob: bestSide === 'Over' ? consensus.over : consensus.under,
+        market_consensus_prob:
+          bestSide === 'Over'
+            ? consensus.over
+            : consensus.under,
         implied_prob: bestEVResult.trueProbability,
-        true_prob: consensus.over,
+        true_prob:
+          bestSide === 'Over'
+            ? consensus.over
+            : consensus.under,
         edge_pct: bestEVResult.edgePercent,
         ev_pct: bestEVResult.expectedValue,
         confidence_score: consensus.confidence,
         direction: bestSide,
-        all_odds: odds,
+        all_odds: [...odds],
       });
     }
 
