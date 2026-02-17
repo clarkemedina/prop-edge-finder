@@ -14,11 +14,16 @@ export class EVService {
 
     if (!consensus.length) return [];
 
-    const { data: allOdds, error } = await supabase
+    let oddsQuery = supabase
       .from('odds_snapshots')
       .select('*')
-      .eq('sport', filters?.sport ?? 'NBA')
       .eq('sportsbook', 'PrizePicks');
+
+    if (filters?.sport) {
+      oddsQuery = oddsQuery.eq('sport', filters.sport);
+    }
+
+    const { data: allOdds, error } = await oddsQuery;
 
     if (error || !allOdds) {
       console.error(error);

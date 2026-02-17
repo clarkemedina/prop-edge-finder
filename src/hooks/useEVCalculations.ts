@@ -23,6 +23,8 @@ export function useEVCalculations(options: UseEVCalculationsOptions = {}) {
 
       if (options.sport && options.sport !== 'All') {
         filters.sport = options.sport;
+      } else {
+        // Don't pass sport filter when "All" is selected
       }
 
       if (options.minEV !== undefined) {
