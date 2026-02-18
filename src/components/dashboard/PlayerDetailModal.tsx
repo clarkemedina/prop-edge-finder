@@ -7,7 +7,12 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
-import { formatOdds, formatProbability, removeVig } from '@/lib/ev-calculations';
+import {
+  formatOdds,
+  formatProbability,
+  removeVig,
+  convertAmericanToProbability,
+} from '@/lib/evCalculator';
 import { generateMockHistorical } from '@/lib/mock-data';
 import type { EVCalculation } from '@/types';
 import {
@@ -67,8 +72,7 @@ export function PlayerDetailModal({ ev, open, onClose }: Props) {
           </DialogTitle>
 
           <DialogDescription className="text-sm text-muted-foreground">
-            Detailed expected value breakdown, sportsbook lines, and historical
-            performance for this player prop.
+            Detailed expected value breakdown and sportsbook comparison.
           </DialogDescription>
 
           <p className="text-sm text-muted-foreground">
@@ -125,9 +129,16 @@ export function PlayerDetailModal({ ev, open, onClose }: Props) {
               </thead>
               <tbody>
                 {activeEV.all_odds.map((snap: any) => {
-                  const { overProb } = removeVig(
-                    snap.over_odds,
+                  const overImplied = convertAmericanToProbability(
+                    snap.over_odds
+                  );
+                  const underImplied = convertAmericanToProbability(
                     snap.under_odds
+                  );
+
+                  const { over } = removeVig(
+                    overImplied,
+                    underImplied
                   );
 
                   return (
@@ -148,7 +159,7 @@ export function PlayerDetailModal({ ev, open, onClose }: Props) {
                         {formatOdds(snap.under_odds)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                        {formatProbability(overProb)}
+                        {formatProbability(over)}
                       </td>
                     </tr>
                   );
@@ -160,27 +171,21 @@ export function PlayerDetailModal({ ev, open, onClose }: Props) {
 
         <div className="mt-4 grid grid-cols-3 gap-3">
           <div className="rounded-lg border border-border p-3 text-center">
-            <p className="text-xs text-muted-foreground">
-              Market Line
-            </p>
+            <p className="text-xs text-muted-foreground">Market Line</p>
             <p className="text-lg font-bold font-mono">
               {activeEV.market_consensus_line.toFixed(1)}
             </p>
           </div>
 
           <div className="rounded-lg border border-border p-3 text-center">
-            <p className="text-xs text-muted-foreground">
-              EV %
-            </p>
+            <p className="text-xs text-muted-foreground">EV %</p>
             <p className="text-lg font-bold font-mono text-primary">
               {activeEV.ev_pct.toFixed(2)}%
             </p>
           </div>
 
           <div className="rounded-lg border border-border p-3 text-center">
-            <p className="text-xs text-muted-foreground">
-              Confidence
-            </p>
+            <p className="text-xs text-muted-foreground">Confidence</p>
             <p className="text-lg font-bold font-mono">
               {activeEV.confidence_score}
             </p>

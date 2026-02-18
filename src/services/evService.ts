@@ -1,219 +1,106 @@
 import { calculateMarketConsensus, calculateEV } from '@/lib/evCalculator';
-import { oddsService } from './oddsService';
-import { EVCalculation, Sport, StatType } from '@/types';
 import { supabase } from '@/lib/supabaseClient';
+import type { EVCalculation, Sport, StatType } from '@/types';
 
 export class EVService {
   async calculateAllEVs(filters?: {
     sport?: string;
-    minEV?: number;
   }): Promise<EVCalculation[]> {
-    const consensus = await oddsService.getMarketConsensus({
-      sport: filters?.sport,
-    });
 
-    if (!consensus.length) return [];
-
-    let oddsQuery = supabase
-      .from('odds_snapshots')
-      .select('*')
-      .eq('sportsbook', 'PrizePicks');
+    let query = supabase.from('odds_snapshots').select('*');
 
     if (filters?.sport) {
-      oddsQuery = oddsQuery.eq('sport', filters.sport);
+      query = query.eq('sport', filters.sport);
     }
 
-    const { data: allOdds, error } = await oddsQuery;
+    const { data: allOdds, error } = await query;
 
     if (error || !allOdds) {
       console.error(error);
       return [];
     }
 
-    const oddsMap = new Map<string, any[]>();
+    const groupedMap = new Map<string, any[]>();
 
     for (const row of allOdds) {
       const key = `${row.player_id}-${row.stat_type}-${row.line}`;
-      if (!oddsMap.has(key)) oddsMap.set(key, []);
-      oddsMap.get(key)!.push({ ...row }); // clone row
+      if (!groupedMap.has(key)) {
+        groupedMap.set(key, []);
+      }
+      groupedMap.get(key)!.push(row);
     }
 
-    const evCalculations: EVCalculation[] = [];
+    const evResults: EVCalculation[] = [];
 
-    for (const prop of consensus) {
-      const key = `${prop.player_id}-${prop.stat_type}-${prop.line}`;
-      const odds = oddsMap.get(key);
-      if (!odds || odds.length === 0) continue;
+    for (const [key, rows] of groupedMap) {
 
-      for (const book of odds) {
-        const overEV = calculateEV(prop.consensus_over, book.over_odds);
-        const underEV = calculateEV(prop.consensus_under, book.under_odds);
+      if (rows.length < 2) continue;
+
+      const consensus = calculateMarketConsensus(
+        rows.map(book => ({
+          sportsbook: book.sportsbook,
+          overOdds: book.over_odds,
+          underOdds: book.under_odds,
+        }))
+      );
+
+      for (const book of rows) {
+
+        const overEV = calculateEV(consensus.over, book.over_odds);
+        const underEV = calculateEV(consensus.under, book.under_odds);
 
         const bestSide =
           overEV.expectedValue > underEV.expectedValue ? 'Over' : 'Under';
 
-        const bestEVResult =
+        const bestResult =
           bestSide === 'Over' ? overEV : underEV;
 
-        if (
-          filters?.minEV !== undefined &&
-          bestEVResult.expectedValue < filters.minEV
-        ) {
-          continue;
-        }
-
-        evCalculations.push({
-          id: `${prop.player_id}-${prop.stat_type}-${prop.line}-${book.sportsbook}`,
-          prop_id: `${prop.player_id}-${prop.stat_type}`,
+        evResults.push({
+          id: `${key}-${book.sportsbook}`,
+          prop_id: key,
           player_prop: {
-            id: `${prop.player_id}-${prop.stat_type}`,
-            player_id: prop.player_id,
+            id: key,
+            player_id: book.player_id,
             player: {
-              id: prop.player_id,
-              name: prop.player_name,
-              sport: prop.sport as Sport,
+              id: book.player_id,
+              name: book.player_name,
+              sport: book.sport as Sport,
               position: '',
               team: '',
             },
-            stat_type: prop.stat_type as StatType,
-            game_date: prop.game_date,
-            opponent: '',
+            stat_type: book.stat_type as StatType,
+            game_date: book.game_date ?? '',
+            opponent: book.opponent ?? '',
           },
           best_sportsbook: {
             id: book.sportsbook,
             name: book.sportsbook,
           },
-          best_line: prop.line,
+          best_line: book.line,
           best_odds:
             bestSide === 'Over'
               ? book.over_odds
               : book.under_odds,
-          market_consensus_line: prop.line,
+          market_consensus_line: book.line,
           market_consensus_prob:
             bestSide === 'Over'
-              ? prop.consensus_over
-              : prop.consensus_under,
-          implied_prob: bestEVResult.trueProbability,
+              ? consensus.over
+              : consensus.under,
+          implied_prob: bestResult.trueProbability,
           true_prob:
             bestSide === 'Over'
-              ? prop.consensus_over
-              : prop.consensus_under,
-          edge_pct: bestEVResult.edgePercent,
-          ev_pct: bestEVResult.expectedValue,
-          confidence_score: prop.num_sportsbooks / 10,
+              ? consensus.over
+              : consensus.under,
+          edge_pct: bestResult.edgePercent,
+          ev_pct: bestResult.expectedValue,
+          confidence_score: Math.round(consensus.confidence * 100),
           direction: bestSide,
-          all_odds: [...odds], // shallow clone only
+          all_odds: rows,
         });
       }
     }
 
-    // Group by player safely
-    const playerMap = new Map<string, EVCalculation[]>();
-
-    for (const ev of evCalculations) {
-      if (!playerMap.has(ev.player_prop.player_id)) {
-        playerMap.set(ev.player_prop.player_id, []);
-      }
-      playerMap.get(ev.player_prop.player_id)!.push(ev);
-    }
-
-    const grouped: EVCalculation[] = [];
-
-    for (const [, playerEvs] of playerMap) {
-      const sorted = [...playerEvs].sort((a, b) => b.ev_pct - a.ev_pct);
-
-      const best = { ...sorted[0] };
-
-      // attach cloned player lines WITHOUT circular reference
-      (best as any).all_player_lines = sorted.map(ev => ({
-        ...ev,
-        all_player_lines: undefined,
-      }));
-
-      grouped.push(best);
-    }
-
-    return grouped.sort((a, b) => b.ev_pct - a.ev_pct);
-  }
-
-  async calculatePropEV(
-    playerId: string,
-    statType: string,
-    line: number
-  ): Promise<EVCalculation[]> {
-    const odds = await oddsService.getLatestOdds(
-      playerId,
-      statType,
-      line
-    );
-
-    if (!odds.length) return [];
-
-    const consensus = calculateMarketConsensus(
-      odds.map((o) => ({
-        overOdds: o.over_odds,
-        underOdds: o.under_odds,
-        sportsbook: o.sportsbook,
-      }))
-    );
-
-    const evCalculations: EVCalculation[] = [];
-
-    for (const book of odds) {
-      const overEV = calculateEV(consensus.over, book.over_odds);
-      const underEV = calculateEV(consensus.under, book.under_odds);
-
-      const bestSide =
-        overEV.expectedValue > underEV.expectedValue ? 'Over' : 'Under';
-
-      const bestEVResult =
-        bestSide === 'Over' ? overEV : underEV;
-
-      evCalculations.push({
-        id: `${playerId}-${statType}-${line}-${book.sportsbook}`,
-        prop_id: `${playerId}-${statType}`,
-        player_prop: {
-          id: `${playerId}-${statType}`,
-          player_id: playerId,
-          player: {
-            id: playerId,
-            name: '',
-            sport: 'NBA' as Sport,
-            position: '',
-            team: '',
-          },
-          stat_type: statType as StatType,
-          game_date: book.game_date,
-          opponent: '',
-        },
-        best_sportsbook: {
-          id: book.sportsbook,
-          name: book.sportsbook,
-        },
-        best_line: line,
-        best_odds:
-          bestSide === 'Over'
-            ? book.over_odds
-            : book.under_odds,
-        market_consensus_line: line,
-        market_consensus_prob:
-          bestSide === 'Over'
-            ? consensus.over
-            : consensus.under,
-        implied_prob: bestEVResult.trueProbability,
-        true_prob:
-          bestSide === 'Over'
-            ? consensus.over
-            : consensus.under,
-        edge_pct: bestEVResult.edgePercent,
-        ev_pct: bestEVResult.expectedValue,
-        confidence_score: consensus.confidence,
-        direction: bestSide,
-        all_odds: [...odds],
-      });
-    }
-
-    return evCalculations.sort((a, b) => b.ev_pct - a.ev_pct);
+    return evResults.sort((a, b) => b.ev_pct - a.ev_pct);
   }
 }
 

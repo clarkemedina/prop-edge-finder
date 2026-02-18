@@ -1,7 +1,7 @@
 import { ArrowUpDown, Plus, ChevronUp, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { formatOdds, formatProbability, formatEV } from '@/lib/ev-calculations';
+import { formatProbability, formatEV, formatOdds } from '@/lib/evCalculator';
 import type { EVCalculation, DashboardFilters } from '@/types';
 import { cn } from '@/lib/utils';
 

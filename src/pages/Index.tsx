@@ -40,9 +40,9 @@ const Index = () => {
       result = result.filter((d) => d.player_prop.player.sport === filters.sport);
     }
 
-    if (filters.statType !== 'All') {
-      result = result.filter((d) => d.player_prop.stat_type === filters.statType);
-    }
+    // if (filters.statType !== 'All') {
+    //  result = result.filter((d) => d.player_prop.stat_type === filters.statType);
+    // }
 
     if (filters.minEV > 0) {
       result = result.filter((d) => d.ev_pct >= filters.minEV);

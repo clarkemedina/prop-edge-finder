@@ -3,7 +3,6 @@ import { TrendingUp, Zap, RefreshCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from "@/lib/supabaseClient";
 import { fetchOdds } from '@/pages/api/fetch-odds';
-;
 
 const CACHE_WINDOW_MINUTES = 30;
 
@@ -25,11 +24,15 @@ export function DashboardHeader() {
         const minutesAgo = Math.round(
           (Date.now() - lastUpdated.getTime()) / (1000 * 60)
         );
+
         setMinutesUntilRefresh(
-          minutesAgo >= CACHE_WINDOW_MINUTES ? 0 : CACHE_WINDOW_MINUTES - minutesAgo
+          minutesAgo >= CACHE_WINDOW_MINUTES
+            ? 0
+            : CACHE_WINDOW_MINUTES - minutesAgo
         );
       }
     }, 60000);
+
     return () => clearInterval(interval);
   }, [lastUpdated]);
 
@@ -45,18 +48,26 @@ export function DashboardHeader() {
     if (data) {
       const lastFetch = new Date(data.created_at);
       setLastUpdated(lastFetch);
+
       const minutesAgo = Math.round(
         (Date.now() - lastFetch.getTime()) / (1000 * 60)
       );
+
       setMinutesUntilRefresh(
-        minutesAgo < CACHE_WINDOW_MINUTES ? CACHE_WINDOW_MINUTES - minutesAgo : 0
+        minutesAgo < CACHE_WINDOW_MINUTES
+          ? CACHE_WINDOW_MINUTES - minutesAgo
+          : 0
       );
     }
   }
 
   async function handleRefresh() {
     if (minutesUntilRefresh && minutesUntilRefresh > 0) {
-      setStatusMessage(`Next refresh in ${minutesUntilRefresh} min`);
+      setStatusMessage(`Using cached odds (${minutesUntilRefresh}m remaining)`);
+      
+      // 🔥 IMPORTANT: still refresh EV calculations
+      queryClient.invalidateQueries({ queryKey: ['ev-calculations'] });
+
       setTimeout(() => setStatusMessage(''), 3000);
       return;
     }
@@ -67,33 +78,38 @@ export function DashboardHeader() {
     try {
       const result = await fetchOdds();
 
-      if (result.cached) {
-        setStatusMessage(result.message);
-        setMinutesUntilRefresh(result.nextRefreshIn ?? null);
-      } else if (result.success) {
+      if (result.success) {
         setLastUpdated(new Date());
-        setMinutesUntilRefresh(CACHE_WINDOW_MINUTES);
-        setCreditsRemaining(result.creditsRemaining ?? null);
-        setStatusMessage(
-          `Updated! ${result.propsStored} props from ${result.gamesProcessed} games`
-        );
+
+        // 🔥 ALWAYS recalc EV
         queryClient.invalidateQueries({ queryKey: ['ev-calculations'] });
+
+        if (result.cached) {
+          setStatusMessage(result.message);
+        } else {
+          setCreditsRemaining(result.creditsRemaining ?? null);
+          setStatusMessage(
+            `Updated! ${result.propsStored ?? 0} props from ${result.gamesProcessed ?? 0} games`
+          );
+        }
       } else {
         setStatusMessage(`Error: ${result.error}`);
       }
     } catch (error) {
-      setStatusMessage('Failed to fetch odds. Check your connection.');
+      setStatusMessage('Failed to fetch odds.');
     } finally {
       setIsRefreshing(false);
-      setTimeout(() => setStatusMessage(''), 5000);
+      setTimeout(() => setStatusMessage(''), 4000);
     }
   }
 
   function formatLastUpdated(): string {
     if (!lastUpdated) return 'Never';
+
     const minutesAgo = Math.round(
       (Date.now() - lastUpdated.getTime()) / (1000 * 60)
     );
+
     if (minutesAgo < 1) return 'Just now';
     if (minutesAgo === 1) return '1 min ago';
     if (minutesAgo < 60) return `${minutesAgo} min ago`;
@@ -105,12 +121,15 @@ export function DashboardHeader() {
   return (
     <header className="border-b border-border bg-card px-4 py-4 md:px-6">
       <div className="flex items-center justify-between">
+
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
             <TrendingUp className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight md:text-xl">PropEdge</h1>
+            <h1 className="text-lg font-bold tracking-tight md:text-xl">
+              PropEdge
+            </h1>
             <p className="hidden text-xs text-muted-foreground sm:block">
               Player Prop +EV Scanner
             </p>
@@ -118,8 +137,9 @@ export function DashboardHeader() {
         </div>
 
         <div className="flex items-center gap-3">
+
           {statusMessage && (
-            <span className="hidden text-xs text-muted-foreground sm:block max-w-[220px] truncate">
+            <span className="hidden text-xs text-muted-foreground sm:block max-w-[240px] truncate">
               {statusMessage}
             </span>
           )}
@@ -153,7 +173,9 @@ export function DashboardHeader() {
               }
             `}
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
+            />
             <span>
               {isRefreshing
                 ? 'Fetching...'
@@ -167,6 +189,7 @@ export function DashboardHeader() {
             <Zap className="h-3.5 w-3.5 text-primary" />
             <span className="text-xs font-medium text-primary">Live</span>
           </div>
+
         </div>
       </div>
     </header>

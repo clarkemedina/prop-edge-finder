@@ -7,7 +7,7 @@ import {
   calculateParlayProbability,
   calculateParlayPayout,
   getParlayRiskLevel,
-} from '@/lib/ev-calculations';
+} from '@/lib/evCalculator'
 import type { EVCalculation } from '@/types';
 import { cn } from '@/lib/utils';
 

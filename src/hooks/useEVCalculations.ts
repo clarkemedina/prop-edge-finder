@@ -15,7 +15,7 @@ export function useEVCalculations(options: UseEVCalculationsOptions = {}) {
       'ev-calculations',
       options.sport ?? 'All',
       options.statType ?? 'All',
-      options.minEV ?? 0,
+      options.minEV ?? -100,
     ],
 
     queryFn: async () => {
